@@ -63,6 +63,18 @@ class MainActivity : AppCompatActivity() {
         layout.addView(saveBtn)
 
         setContentView(layout)
+
+        // Request runtime permissions safely on Android 8+
+        val requiredPerms = arrayOf(
+            android.Manifest.permission.CALL_PHONE,
+            android.Manifest.permission.READ_PHONE_STATE
+        )
+        val missing = requiredPerms.filter {
+            androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) {
+            androidx.core.app.ActivityCompat.requestPermissions(this, missing.toTypedArray(), 101)
+        }
     }
 
     /**
