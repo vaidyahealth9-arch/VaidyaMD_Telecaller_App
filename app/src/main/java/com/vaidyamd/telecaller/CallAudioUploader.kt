@@ -43,7 +43,7 @@ object CallAudioUploader {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                Log.error(TAG, "Failed to upload recording for call $callId: ${e.message}")
+                Log.e(TAG, "Failed to upload recording for call $callId: ${e.message}")
             }
 
             override fun onResponse(call: Call, response: Response) {
