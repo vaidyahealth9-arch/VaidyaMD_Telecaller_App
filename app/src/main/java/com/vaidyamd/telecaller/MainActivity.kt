@@ -14,6 +14,8 @@ import android.view.Gravity
 import android.view.View
 import android.widget.*
 import okhttp3.*
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -159,8 +161,10 @@ class MainActivity : Activity() {
                 marginEnd = 16
             }
             setOnClickListener {
-                if (activeLeadId != null && activeLeadPhone != null) {
-                    placeCallToPatient(activeLeadId!!, activeLeadPhone!)
+                val leadId = activeLeadId
+                val phone = activeLeadPhone
+                if (leadId != null && phone != null) {
+                    placeCallToPatient(leadId, phone)
                 } else {
                     Toast.makeText(this@MainActivity, "No lead selected in queue", Toast.LENGTH_SHORT).show()
                 }
@@ -311,10 +315,13 @@ class MainActivity : Activity() {
             put("current_state", "idle")
         }
 
+        val mediaType = "application/json; charset=utf-8".toMediaTypeOrNull()
+        val requestBody = payload.toString().toRequestBody(mediaType)
+
         val request = Request.Builder()
             .url("$serverUrl/api/crm/fleet/heartbeat")
             .header("Authorization", "Bearer $token")
-            .post(RequestBody.create(MediaType.parse("application/json"), payload.toString()))
+            .post(requestBody)
             .build()
 
         httpClient.newCall(request).enqueue(object : Callback {
@@ -327,7 +334,7 @@ class MainActivity : Activity() {
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val body = response.body()?.string() ?: ""
+                val body = response.body?.string() ?: ""
                 try {
                     val json = JSONObject(body)
                     val isRevoked = json.optBoolean("is_revoked", false)
@@ -426,7 +433,7 @@ class MainActivity : Activity() {
             }
 
             override fun onResponse(call: Call, response: Response) {
-                val body = response.body()?.string() ?: ""
+                val body = response.body?.string() ?: ""
                 runOnUiThread {
                     if (response.isSuccessful && body.trim() != "null" && body.isNotEmpty()) {
                         try {
