@@ -297,8 +297,9 @@ class MainActivity : Activity() {
 
     private fun sendHeartbeat() {
         val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trimEnd('/') ?: return
-        val token = prefs.getString("auth_token", "") ?: ""
+        val rawServerUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: return
+        val baseUrl = if (rawServerUrl.endsWith("/api")) rawServerUrl.removeSuffix("/api") else rawServerUrl
+        val token = prefs.getString("auth_token", "")?.trim() ?: ""
 
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
         val batteryLevel = try {
@@ -319,7 +320,7 @@ class MainActivity : Activity() {
         val requestBody = payload.toString().toRequestBody(mediaType)
 
         val request = Request.Builder()
-            .url("$serverUrl/api/crm/fleet/heartbeat")
+            .url("$baseUrl/api/crm/fleet/heartbeat")
             .header("Authorization", "Bearer $token")
             .post(requestBody)
             .build()
@@ -410,15 +411,15 @@ class MainActivity : Activity() {
      * Fetches the next priority lead from the Progressive Queue
      */
     private fun fetchNextLeadFromQueue() {
-        val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trimEnd('/') ?: return
-        val token = prefs.getString("auth_token", "") ?: ""
+        val rawServerUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: return
+        val baseUrl = if (rawServerUrl.endsWith("/api")) rawServerUrl.removeSuffix("/api") else rawServerUrl
+        val token = prefs.getString("auth_token", "")?.trim() ?: ""
 
         leadNameText.text = "Loading next patient..."
         leadPhoneText.text = "Checking queue..."
 
         val request = Request.Builder()
-            .url("$serverUrl/api/crm/dialer/next-lead")
+            .url("$baseUrl/api/crm/dialer/next-lead")
             .header("Authorization", "Bearer $token")
             .get()
             .build()
@@ -435,7 +436,14 @@ class MainActivity : Activity() {
             override fun onResponse(call: Call, response: Response) {
                 val body = response.body?.string() ?: ""
                 runOnUiThread {
-                    if (response.isSuccessful && body.trim() != "null" && body.isNotEmpty()) {
+                    if (!response.isSuccessful) {
+                        leadNameText.text = "Queue Error (${response.code})"
+                        leadPhoneText.text = "HTTP ${response.code}"
+                        leadDetailsText.text = body.take(120)
+                        dialBtn.isEnabled = false
+                        return@runOnUiThread
+                    }
+                    if (body.trim() != "null" && body.isNotEmpty()) {
                         try {
                             val json = JSONObject(body)
                             val leadObj = json.getJSONObject("lead")
