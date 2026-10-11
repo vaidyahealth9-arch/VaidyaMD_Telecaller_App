@@ -7,9 +7,9 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
+import android.app.Activity
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,16 +64,20 @@ class MainActivity : AppCompatActivity() {
 
         setContentView(layout)
 
-        // Request runtime permissions safely on Android 8+
-        val requiredPerms = arrayOf(
-            android.Manifest.permission.CALL_PHONE,
-            android.Manifest.permission.READ_PHONE_STATE
-        )
-        val missing = requiredPerms.filter {
-            androidx.core.content.ContextCompat.checkSelfPermission(this, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) {
-            androidx.core.app.ActivityCompat.requestPermissions(this, missing.toTypedArray(), 101)
+        // Request runtime permissions safely on Android 6+
+        try {
+            val requiredPerms = arrayOf(
+                android.Manifest.permission.CALL_PHONE,
+                android.Manifest.permission.READ_PHONE_STATE
+            )
+            val missing = requiredPerms.filter {
+                checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+            if (missing.isNotEmpty()) {
+                requestPermissions(missing.toTypedArray(), 101)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Permission request error", e)
         }
     }
 
