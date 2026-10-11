@@ -3,6 +3,7 @@ package com.vaidyamd.telecaller
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
@@ -16,143 +17,267 @@ import android.widget.*
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 class MainActivity : Activity() {
 
-    private lateinit var statusText: TextView
-    private lateinit var queueCard: LinearLayout
-    private lateinit var leadNameText: TextView
-    private lateinit var leadPhoneText: TextView
-    private lateinit var leadDetailsText: TextView
-    private lateinit var dialBtn: Button
-    private lateinit var skipBtn: Button
-    private lateinit var fetchQueueBtn: Button
-
+    private lateinit var prefs: SharedPreferences
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(10, TimeUnit.SECONDS)
-        .readTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(12, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
         .build()
 
+    // Root views
+    private lateinit var contentContainer: FrameLayout
+    private lateinit var bottomNav: LinearLayout
+    private val navButtons = mutableListOf<Button>()
+
+    // Tab 1: Queue Views
+    private lateinit var queueView: View
+    private lateinit var queueStatusText: TextView
+    private lateinit var queueLeadName: TextView
+    private lateinit var queueLeadPhone: TextView
+    private lateinit var queueLeadDetails: TextView
+    private lateinit var queueDialBtn: Button
+    private lateinit var queueNextBtn: Button
     private var activeLeadId: String? = null
     private var activeLeadPhone: String? = null
-    private var currentActiveCallId: String? = null
 
-    private var webSocket: WebSocket? = null
+    // Tab 2: All Leads Views
+    private lateinit var leadsView: View
+    private lateinit var leadsListContainer: LinearLayout
+    private lateinit var leadsSearchInput: EditText
+    private lateinit var leadsCountText: TextView
+
+    // Tab 3: History Views
+    private lateinit var historyView: View
+    private lateinit var historyListContainer: LinearLayout
+
+    // Tab 4: KPIs / Settings Views
+    private lateinit var statsView: View
+    private lateinit var statCallsText: TextView
+    private lateinit var statTalkTimeText: TextView
+    private lateinit var statConversionsText: TextView
+    private lateinit var statFollowupsText: TextView
+    private lateinit var serverInput: EditText
+    private lateinit var tokenInput: EditText
+
     private var heartbeatTimer: java.util.Timer? = null
+    private var webSocket: WebSocket? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
 
-        // Master ScrollView Container
-        val scrollView = ScrollView(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT
+        val rootLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.MATCH_PARENT
             )
             setBackgroundColor(Color.parseColor("#F8FAFC"))
         }
 
-        val mainLayout = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(40, 48, 40, 48)
-        }
+        // Top Header
+        val header = createHeader()
+        rootLayout.addView(header)
 
-        // --- Brand Header: VaidyaMD Teal & Gold ---
-        val headerLayout = LinearLayout(this).apply {
+        // Dynamic Content Container (Switching 4 tabs)
+        contentContainer = FrameLayout(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+        rootLayout.addView(contentContainer)
+
+        // Build 4 tab views
+        queueView = buildQueueTab()
+        leadsView = buildLeadsTab()
+        historyView = buildHistoryTab()
+        statsView = buildStatsTab()
+
+        // Bottom Navigation Bar
+        bottomNav = buildBottomNav()
+        rootLayout.addView(bottomNav)
+
+        setContentView(rootLayout)
+
+        // Select Tab 1 by default
+        switchTab(0)
+
+        // Permissions & Background presence
+        requestPermissionsSafely()
+        startPresenceSync()
+        fetchNextLeadFromQueue()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        heartbeatTimer?.cancel()
+        webSocket?.close(1000, "Activity destroyed")
+    }
+
+    // ========================================================================
+    // Header & Bottom Navigation
+    // ========================================================================
+
+    private fun createHeader(): View {
+        return LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, 24)
-        }
+            setPadding(32, 28, 32, 24)
+            setBackgroundColor(Color.WHITE)
+            elevation = 6f
 
-        val logoIcon = ImageView(this).apply {
-            setImageResource(R.drawable.ic_launcher)
-            layoutParams = LinearLayout.LayoutParams(96, 96).apply {
-                marginEnd = 24
+            val logo = ImageView(this@MainActivity).apply {
+                setImageResource(R.drawable.ic_launcher)
+                layoutParams = LinearLayout.LayoutParams(76, 76).apply {
+                    marginEnd = 20
+                }
+            }
+            addView(logo)
+
+            val titles = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+            val titleText = TextView(this@MainActivity).apply {
+                text = "VaidyaMD Telecaller"
+                textSize = 18f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#0B4F6C"))
+            }
+            val subtitleText = TextView(this@MainActivity).apply {
+                text = "Zero-Cost SIM Dialer & Whisper Sync"
+                textSize = 11f
+                setTextColor(Color.parseColor("#64748B"))
+            }
+            titles.addView(titleText)
+            titles.addView(subtitleText)
+            addView(titles)
+        }
+    }
+
+    private fun buildBottomNav(): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setBackgroundColor(Color.WHITE)
+            elevation = 16f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            val tabs = listOf("Queue", "Leads", "History", "Stats")
+            for (i in tabs.indices) {
+                val btn = Button(this@MainActivity).apply {
+                    text = tabs[i]
+                    textSize = 12f
+                    setBackgroundColor(Color.TRANSPARENT)
+                    setTextColor(Color.parseColor("#64748B"))
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                    setOnClickListener { switchTab(i) }
+                }
+                navButtons.add(btn)
+                addView(btn)
             }
         }
-        headerLayout.addView(logoIcon)
+    }
 
-        val headerTitles = LinearLayout(this).apply {
+    private fun switchTab(index: Int) {
+        contentContainer.removeAllViews()
+        for (i in navButtons.indices) {
+            if (i == index) {
+                navButtons[i].setTextColor(Color.parseColor("#0B4F6C"))
+                navButtons[i].setTypeface(null, Typeface.BOLD)
+            } else {
+                navButtons[i].setTextColor(Color.parseColor("#64748B"))
+                navButtons[i].setTypeface(null, Typeface.NORMAL)
+            }
+        }
+        when (index) {
+            0 -> contentContainer.addView(queueView)
+            1 -> {
+                contentContainer.addView(leadsView)
+                fetchAllLeads()
+            }
+            2 -> {
+                contentContainer.addView(historyView)
+                fetchCallHistory()
+            }
+            3 -> {
+                contentContainer.addView(statsView)
+                fetchPerformanceStats()
+            }
+        }
+    }
+
+    // ========================================================================
+    // TAB 1: DIALER QUEUE
+    // ========================================================================
+
+    private fun buildQueueTab(): View {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#F8FAFC"))
+        }
+        val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(32, 32, 32, 32)
         }
-        val appTitle = TextView(this).apply {
-            text = "VaidyaMD Telecaller"
-            textSize = 20f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#0B4F6C"))
-        }
-        val appSubtitle = TextView(this).apply {
-            text = "Zero-Cost SIM Dialer & Whisper Sync"
-            textSize = 12f
-            setTextColor(Color.parseColor("#64748B"))
-        }
-        headerTitles.addView(appTitle)
-        headerTitles.addView(appSubtitle)
-        headerLayout.addView(headerTitles)
-        mainLayout.addView(headerLayout)
 
-        // Status Banner
-        statusText = TextView(this).apply {
-            text = "● Offline (Connecting to Hospital Server...)"
-            textSize = 13f
+        queueStatusText = TextView(this).apply {
+            text = "● Offline (Connecting...)"
+            textSize = 12f
             setTypeface(null, Typeface.BOLD)
-            setPadding(24, 16, 24, 16)
+            setPadding(20, 14, 20, 14)
             setTextColor(Color.parseColor("#D97706"))
             setBackgroundColor(Color.parseColor("#FEF3C7"))
         }
-        mainLayout.addView(statusText)
+        layout.addView(queueStatusText)
 
-        // --- SECTION 1: Telecaller Dialer Queue Card ---
-        val sectionTitle = TextView(this).apply {
-            text = "PATIENT QUEUE"
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#94A3B8"))
-            setPadding(0, 36, 0, 12)
-        }
-        mainLayout.addView(sectionTitle)
-
-        queueCard = LinearLayout(this).apply {
+        val queueCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(36, 36, 36, 36)
+            setPadding(32, 32, 32, 32)
             setBackgroundColor(Color.WHITE)
-            elevation = 4f
+            elevation = 3f
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 28 }
         }
 
-        leadNameText = TextView(this).apply {
-            text = "Loading next patient..."
+        queueLeadName = TextView(this).apply {
+            text = "Loading next lead..."
             textSize = 18f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#0F172A"))
         }
-        queueCard.addView(leadNameText)
+        queueCard.addView(queueLeadName)
 
-        leadPhoneText = TextView(this).apply {
+        queueLeadPhone = TextView(this).apply {
             text = "+91 ----------"
             textSize = 15f
             setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
             setTextColor(Color.parseColor("#2878A8"))
             setPadding(0, 8, 0, 8)
         }
-        queueCard.addView(leadPhoneText)
+        queueCard.addView(queueLeadPhone)
 
-        leadDetailsText = TextView(this).apply {
-            text = "Tap 'Fetch Next Lead' to begin"
+        queueLeadDetails = TextView(this).apply {
+            text = "Tap 'Refresh Lead Queue' to begin"
             textSize = 12f
             setTextColor(Color.parseColor("#64748B"))
             setPadding(0, 0, 0, 24)
         }
-        queueCard.addView(leadDetailsText)
+        queueCard.addView(queueLeadDetails)
 
-        // Action Buttons Row
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
         }
-
-        dialBtn = Button(this).apply {
+        queueDialBtn = Button(this).apply {
             text = "📞 Call via SIM"
             setBackgroundColor(Color.parseColor("#15803D"))
             setTextColor(Color.WHITE)
@@ -166,74 +291,202 @@ class MainActivity : Activity() {
                 if (leadId != null && phone != null) {
                     placeCallToPatient(leadId, phone)
                 } else {
-                    Toast.makeText(this@MainActivity, "No lead selected in queue", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, "No active lead in queue", Toast.LENGTH_SHORT).show()
                 }
             }
         }
-        btnRow.addView(dialBtn)
+        btnRow.addView(queueDialBtn)
 
-        skipBtn = Button(this).apply {
+        queueNextBtn = Button(this).apply {
             text = "Next Lead"
             setBackgroundColor(Color.parseColor("#E2E8F0"))
             setTextColor(Color.parseColor("#334155"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener {
-                fetchNextLeadFromQueue()
-            }
+            setOnClickListener { fetchNextLeadFromQueue() }
         }
-        btnRow.addView(skipBtn)
-
+        btnRow.addView(queueNextBtn)
         queueCard.addView(btnRow)
-        mainLayout.addView(queueCard)
+        layout.addView(queueCard)
 
-        fetchQueueBtn = Button(this).apply {
+        val refreshBtn = Button(this).apply {
             text = "🔄 Refresh Lead Queue"
             setBackgroundColor(Color.parseColor("#0B4F6C"))
             setTextColor(Color.WHITE)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = 20
-            }
-            setOnClickListener {
-                fetchNextLeadFromQueue()
-            }
+            ).apply { topMargin = 24 }
+            setOnClickListener { fetchNextLeadFromQueue() }
         }
-        mainLayout.addView(fetchQueueBtn)
+        layout.addView(refreshBtn)
 
-        // --- SECTION 2: Server Settings ---
-        val settingsTitle = TextView(this).apply {
+        scroll.addView(layout)
+        return scroll
+    }
+
+    // ========================================================================
+    // TAB 2: ALL LEADS DIRECTORY
+    // ========================================================================
+
+    private fun buildLeadsTab(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 28, 32, 28)
+        }
+
+        leadsSearchInput = EditText(this).apply {
+            hint = "🔍 Search patient name, phone, or city..."
+            textSize = 13f
+            setBackgroundColor(Color.WHITE)
+            setPadding(24, 20, 24, 20)
+        }
+        root.addView(leadsSearchInput)
+
+        val searchBtn = Button(this).apply {
+            text = "Search Leads"
+            setBackgroundColor(Color.parseColor("#0B4F6C"))
+            setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 12 }
+            setOnClickListener { fetchAllLeads(leadsSearchInput.text.toString().trim()) }
+        }
+        root.addView(searchBtn)
+
+        leadsCountText = TextView(this).apply {
+            text = "Loading leads..."
+            textSize = 12f
+            setTextColor(Color.parseColor("#64748B"))
+            setPadding(0, 16, 0, 12)
+        }
+        root.addView(leadsCountText)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+        leadsListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        scroll.addView(leadsListContainer)
+        root.addView(scroll)
+
+        return root
+    }
+
+    // ========================================================================
+    // TAB 3: CALL HISTORY & SYNC STATUS
+    // ========================================================================
+
+    private fun buildHistoryTab(): View {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 28, 32, 28)
+        }
+
+        val title = TextView(this).apply {
+            text = "RECENT CALLS & RECORDINGS"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 0, 0, 16)
+        }
+        root.addView(title)
+
+        val scroll = ScrollView(this).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                0,
+                1f
+            )
+        }
+        historyListContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        scroll.addView(historyListContainer)
+        root.addView(scroll)
+
+        return root
+    }
+
+    // ========================================================================
+    // TAB 4: STATS & CONNECTION SETTINGS
+    // ========================================================================
+
+    private fun buildStatsTab(): View {
+        val scroll = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#F8FAFC"))
+        }
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(32, 28, 32, 28)
+        }
+
+        val perfTitle = TextView(this).apply {
+            text = "TODAY'S PERFORMANCE"
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#94A3B8"))
+            setPadding(0, 0, 0, 12)
+        }
+        layout.addView(perfTitle)
+
+        // KPI Metric Cards
+        val grid1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        statCallsText = addKpiCard(grid1, "Calls Made Today", "0")
+        statTalkTimeText = addKpiCard(grid1, "Total Talk Time", "0m")
+        layout.addView(grid1)
+
+        val grid2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 16 }
+        }
+        statConversionsText = addKpiCard(grid2, "Conversions", "0")
+        statFollowupsText = addKpiCard(grid2, "Pending Follow-ups", "0")
+        layout.addView(grid2)
+
+        // Connection Settings
+        val setHeader = TextView(this).apply {
             text = "CONNECTION SETTINGS"
             textSize = 11f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#94A3B8"))
             setPadding(0, 36, 0, 12)
         }
-        mainLayout.addView(settingsTitle)
+        layout.addView(setHeader)
 
-        val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
         val savedUrl = prefs.getString("server_url", "http://192.168.1.3:8000")
         val savedToken = prefs.getString("auth_token", "demo-telecaller-token")
 
-        val serverInput = EditText(this).apply {
+        serverInput = EditText(this).apply {
             hint = "HMS API URL (e.g. http://192.168.1.3:8000)"
             setText(savedUrl)
             textSize = 13f
         }
-        mainLayout.addView(serverInput)
+        layout.addView(serverInput)
 
-        val tokenInput = EditText(this).apply {
+        tokenInput = EditText(this).apply {
             hint = "Telecaller Auth Token"
             setText(savedToken)
             textSize = 13f
         }
-        mainLayout.addView(tokenInput)
+        layout.addView(tokenInput)
 
         val saveBtn = Button(this).apply {
             text = "Save & Reconnect"
-            setBackgroundColor(Color.parseColor("#2878A8"))
+            setBackgroundColor(Color.parseColor("#0B4F6C"))
             setTextColor(Color.WHITE)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 16 }
             setOnClickListener {
                 prefs.edit()
                     .putString("server_url", serverInput.text.toString().trim())
@@ -244,45 +497,265 @@ class MainActivity : Activity() {
                 fetchNextLeadFromQueue()
             }
         }
-        mainLayout.addView(saveBtn)
+        layout.addView(saveBtn)
 
-        scrollView.addView(mainLayout)
-        setContentView(scrollView)
-
-        // Request Permissions on Startup
-        requestPermissionsSafely()
-
-        // Initialize Background Services
-        startPresenceSync()
-        fetchNextLeadFromQueue()
+        scroll.addView(layout)
+        return scroll
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        heartbeatTimer?.cancel()
-        webSocket?.close(1000, "App closed")
+    private fun addKpiCard(parent: LinearLayout, title: String, value: String): TextView {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(24, 20, 24, 20)
+            setBackgroundColor(Color.WHITE)
+            elevation = 2f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = 12
+            }
+        }
+        val label = TextView(this).apply {
+            text = title
+            textSize = 10f
+            setTextColor(Color.parseColor("#64748B"))
+        }
+        val valText = TextView(this).apply {
+            text = value
+            textSize = 18f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#0B4F6C"))
+            setPadding(0, 4, 0, 0)
+        }
+        card.addView(label)
+        card.addView(valText)
+        parent.addView(card)
+        return valText
     }
 
-    private fun requestPermissionsSafely() {
-        try {
-            val perms = arrayOf(
-                android.Manifest.permission.CALL_PHONE,
-                android.Manifest.permission.READ_PHONE_STATE
-            )
-            val missing = perms.filter {
-                checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+    // ========================================================================
+    // Network Operations: Queue, Leads, Presence, History
+    // ========================================================================
+
+    private fun cleanBaseUrl(): String {
+        var url = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: "http://192.168.1.3:8000"
+        if (url.endsWith("/api")) {
+            url = url.substring(0, url.length - 4)
+        }
+        return url
+    }
+
+    private fun getAuthToken(): String {
+        return prefs.getString("auth_token", "demo-telecaller-token")?.trim() ?: ""
+    }
+
+    private fun fetchNextLeadFromQueue() {
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
+
+        queueLeadName.text = "Loading next patient..."
+        queueLeadPhone.text = "Checking queue..."
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/crm/dialer/next-lead")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    queueLeadName.text = "Cannot Reach Server"
+                    queueLeadPhone.text = "Check connection settings"
+                    queueLeadDetails.text = e.message ?: "Network error"
+                    queueDialBtn.isEnabled = false
+                }
             }
-            if (missing.isNotEmpty()) {
-                requestPermissions(missing.toTypedArray(), 101)
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                runOnUiThread {
+                    if (!response.isSuccessful) {
+                        queueLeadName.text = "Queue Error (${response.code})"
+                        queueLeadPhone.text = "HTTP ${response.code}"
+                        queueLeadDetails.text = body.take(120)
+                        queueDialBtn.isEnabled = false
+                        return@runOnUiThread
+                    }
+                    if (body.trim() != "null" && body.isNotEmpty()) {
+                        try {
+                            val json = JSONObject(body)
+                            val leadObj = json.getJSONObject("lead")
+                            activeLeadId = leadObj.getString("id")
+                            activeLeadPhone = leadObj.getString("phone")
+                            val name = leadObj.getString("name")
+                            val city = leadObj.optString("city", "City not specified")
+                            val callsCount = json.optInt("previous_call_count", 0)
+
+                            queueLeadName.text = name
+                            queueLeadPhone.text = activeLeadPhone
+                            queueLeadDetails.text = "📍 $city  •  Previous Calls: $callsCount"
+                            queueDialBtn.isEnabled = true
+                        } catch (e: Exception) {
+                            queueLeadName.text = "Queue Clear"
+                            queueLeadPhone.text = "No pending leads"
+                            queueLeadDetails.text = "All patient leads have been contacted!"
+                            queueDialBtn.isEnabled = false
+                        }
+                    } else {
+                        queueLeadName.text = "Queue Clear"
+                        queueLeadPhone.text = "No pending leads"
+                        queueLeadDetails.text = "All patient leads have been contacted!"
+                        queueDialBtn.isEnabled = false
+                    }
+                }
             }
-        } catch (e: Exception) {
-            android.util.Log.e("MainActivity", "Permission request error", e)
+        })
+    }
+
+    private fun fetchAllLeads(query: String = "") {
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
+
+        leadsListContainer.removeAllViews()
+        leadsCountText.text = "Searching leads..."
+
+        val url = if (query.isNotEmpty()) "$baseUrl/api/crm/leads?search=$query&limit=50" else "$baseUrl/api/crm/leads?limit=50"
+        val request = Request.Builder()
+            .url(url)
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    leadsCountText.text = "Failed to load leads: ${e.message}"
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                runOnUiThread {
+                    if (response.isSuccessful) {
+                        try {
+                            val json = JSONObject(body)
+                            val items = json.getJSONArray("items")
+                            leadsCountText.text = "Showing ${items.length()} patient leads"
+                            renderLeadsList(items)
+                        } catch (e: Exception) {
+                            leadsCountText.text = "Error parsing leads"
+                        }
+                    } else {
+                        leadsCountText.text = "Error HTTP ${response.code}"
+                    }
+                }
+            }
+        })
+    }
+
+    private fun renderLeadsList(items: JSONArray) {
+        leadsListContainer.removeAllViews()
+        for (i in 0 until items.length()) {
+            val lead = items.getJSONObject(i)
+            val name = lead.getString("name")
+            val phone = lead.getString("phone")
+            val city = lead.optString("city", "N/A")
+            val status = lead.optString("status", "NEW").replace('_', ' ')
+
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(24, 20, 24, 20)
+                setBackgroundColor(Color.WHITE)
+                elevation = 2f
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = 16 }
+            }
+
+            val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            val nameView = TextView(this).apply {
+                text = name
+                textSize = 15f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#0F172A"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val statusBadge = TextView(this).apply {
+                text = status
+                textSize = 10f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Color.parseColor("#0B4F6C"))
+                setBackgroundColor(Color.parseColor("#E0F2FE"))
+                setPadding(12, 6, 12, 6)
+            }
+            titleRow.addView(nameView)
+            titleRow.addView(statusBadge)
+            card.addView(titleRow)
+
+            val details = TextView(this).apply {
+                text = "$phone  •  📍 $city"
+                textSize = 12f
+                setTextColor(Color.parseColor("#64748B"))
+                setPadding(0, 8, 0, 16)
+            }
+            card.addView(details)
+
+            val callBtn = Button(this).apply {
+                text = "📞 Call $phone"
+                setBackgroundColor(Color.parseColor("#15803D"))
+                setTextColor(Color.WHITE)
+                textSize = 12f
+                setOnClickListener {
+                    val id = lead.getString("id")
+                    placeCallToPatient(id, phone)
+                }
+            }
+            card.addView(callBtn)
+
+            leadsListContainer.addView(card)
         }
     }
 
-    /**
-     * Periodically sends Heartbeat & maintains WebSocket connection for auto-dial trigger.
-     */
+    private fun fetchCallHistory() {
+        historyListContainer.removeAllViews()
+        val notice = TextView(this).apply {
+            text = "Automated Call Recording Sync Active.\nAny outgoing calls made from this device are automatically checked upon hang-up and synced to the VaidyaMD server for Faster-Whisper transcription."
+            textSize = 12f
+            setTextColor(Color.parseColor("#475569"))
+            setPadding(24, 24, 24, 24)
+            setBackgroundColor(Color.WHITE)
+        }
+        historyListContainer.addView(notice)
+    }
+
+    private fun fetchPerformanceStats() {
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/crm/analytics/dashboard")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {}
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                runOnUiThread {
+                    if (response.isSuccessful) {
+                        try {
+                            val json = JSONObject(body)
+                            statCallsText.text = json.optInt("calls_made_today", 0).toString()
+                            statConversionsText.text = json.optInt("conversions_total", 0).toString()
+                            statFollowupsText.text = json.optInt("pending_follow_ups_today", 0).toString()
+                        } catch (e: Exception) {}
+                    }
+                }
+            }
+        })
+    }
+
     private fun startPresenceSync() {
         heartbeatTimer?.cancel()
         heartbeatTimer = java.util.Timer()
@@ -296,10 +769,8 @@ class MainActivity : Activity() {
     }
 
     private fun sendHeartbeat() {
-        val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
-        val rawServerUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: return
-        val baseUrl = if (rawServerUrl.endsWith("/api")) rawServerUrl.removeSuffix("/api") else rawServerUrl
-        val token = prefs.getString("auth_token", "")?.trim() ?: ""
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
 
         val deviceId = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
         val batteryLevel = try {
@@ -328,9 +799,9 @@ class MainActivity : Activity() {
         httpClient.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
                 runOnUiThread {
-                    statusText.text = "● Offline (Cannot reach server)"
-                    statusText.setTextColor(Color.parseColor("#DC2626"))
-                    statusText.setBackgroundColor(Color.parseColor("#FEE2E2"))
+                    queueStatusText.text = "● Offline (${e.message ?: "Server Unreachable"})"
+                    queueStatusText.setTextColor(Color.parseColor("#DC2626"))
+                    queueStatusText.setBackgroundColor(Color.parseColor("#FEE2E2"))
                 }
             }
 
@@ -344,15 +815,15 @@ class MainActivity : Activity() {
                         return
                     }
                     runOnUiThread {
-                        statusText.text = "● Online (Ready for SIM Calls)"
-                        statusText.setTextColor(Color.parseColor("#15803D"))
-                        statusText.setBackgroundColor(Color.parseColor("#DCFCE7"))
+                        queueStatusText.text = "● Online (Ready for SIM Calls)"
+                        queueStatusText.setTextColor(Color.parseColor("#15803D"))
+                        queueStatusText.setBackgroundColor(Color.parseColor("#DCFCE7"))
                     }
                 } catch (e: Exception) {
                     runOnUiThread {
-                        statusText.text = "● Connected (VaidyaMD Bridge Active)"
-                        statusText.setTextColor(Color.parseColor("#15803D"))
-                        statusText.setBackgroundColor(Color.parseColor("#DCFCE7"))
+                        queueStatusText.text = "● Connected (VaidyaMD Bridge Active)"
+                        queueStatusText.setTextColor(Color.parseColor("#15803D"))
+                        queueStatusText.setBackgroundColor(Color.parseColor("#DCFCE7"))
                     }
                 }
             }
@@ -360,32 +831,26 @@ class MainActivity : Activity() {
     }
 
     private fun handleDeviceRevoked() {
-        val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
         prefs.edit().clear().apply()
-
         AlertDialog.Builder(this)
             .setTitle("Access Revoked")
             .setMessage("This mobile device has been de-authorized by the hospital administration.")
             .setCancelable(false)
             .setPositiveButton("OK") { _, _ ->
-                statusText.text = "● REVOKED (Access Terminated)"
-                statusText.setTextColor(Color.parseColor("#DC2626"))
-                statusText.setBackgroundColor(Color.parseColor("#FEE2E2"))
+                queueStatusText.text = "● REVOKED (Access Terminated)"
+                queueStatusText.setTextColor(Color.parseColor("#DC2626"))
+                queueStatusText.setBackgroundColor(Color.parseColor("#FEE2E2"))
             }
             .show()
     }
 
-    /**
-     * Connects to WebSocket to allow PC Web Desk to trigger calls on this phone automatically.
-     */
     private fun connectWebSocketBridge() {
-        val prefs = getSharedPreferences("vaidyamd_crm", MODE_PRIVATE)
-        val serverUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trimEnd('/') ?: return
-        val token = prefs.getString("auth_token", "") ?: ""
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
 
-        val wsUrl = serverUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/ws/notifications/demo?token=$token"
-
+        val wsUrl = baseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/ws/notifications/demo?token=$token"
         val request = Request.Builder().url(wsUrl).build()
+
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
@@ -400,94 +865,35 @@ class MainActivity : Activity() {
                             }
                         }
                     }
-                } catch (e: Exception) {
-                    android.util.Log.e("MainActivity", "WS message error", e)
-                }
+                } catch (e: Exception) {}
             }
         })
     }
 
-    /**
-     * Fetches the next priority lead from the Progressive Queue
-     */
-    private fun fetchNextLeadFromQueue() {
-        val rawServerUrl = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: return
-        val baseUrl = if (rawServerUrl.endsWith("/api")) rawServerUrl.removeSuffix("/api") else rawServerUrl
-        val token = prefs.getString("auth_token", "")?.trim() ?: ""
-
-        leadNameText.text = "Loading next patient..."
-        leadPhoneText.text = "Checking queue..."
-
-        val request = Request.Builder()
-            .url("$baseUrl/api/crm/dialer/next-lead")
-            .header("Authorization", "Bearer $token")
-            .get()
-            .build()
-
-        httpClient.newCall(request).enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                runOnUiThread {
-                    leadNameText.text = "No Queue Available"
-                    leadPhoneText.text = "Check connection settings"
-                    leadDetailsText.text = e.message ?: "Failed to connect"
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                val body = response.body?.string() ?: ""
-                runOnUiThread {
-                    if (!response.isSuccessful) {
-                        leadNameText.text = "Queue Error (${response.code})"
-                        leadPhoneText.text = "HTTP ${response.code}"
-                        leadDetailsText.text = body.take(120)
-                        dialBtn.isEnabled = false
-                        return@runOnUiThread
-                    }
-                    if (body.trim() != "null" && body.isNotEmpty()) {
-                        try {
-                            val json = JSONObject(body)
-                            val leadObj = json.getJSONObject("lead")
-                            activeLeadId = leadObj.getString("id")
-                            activeLeadPhone = leadObj.getString("phone")
-                            val name = leadObj.getString("name")
-                            val city = leadObj.optString("city", "Location not specified")
-                            val callsCount = json.optInt("previous_call_count", 0)
-
-                            leadNameText.text = name
-                            leadPhoneText.text = activeLeadPhone
-                            leadDetailsText.text = "📍 $city  •  Calls Made: $callsCount"
-                            dialBtn.isEnabled = true
-                        } catch (e: Exception) {
-                            leadNameText.text = "Queue Clear"
-                            leadPhoneText.text = "No pending leads"
-                            leadDetailsText.text = "All patient leads have been contacted!"
-                            dialBtn.isEnabled = false
-                        }
-                    } else {
-                        leadNameText.text = "Queue Clear"
-                        leadPhoneText.text = "No pending leads"
-                        leadDetailsText.text = "All patient leads have been contacted!"
-                        dialBtn.isEnabled = false
-                    }
-                }
-            }
-        })
-    }
-
-    /**
-     * Places physical call via standard Android SIM
-     */
     private fun placeCallToPatient(leadIdOrCallId: String, phoneNumber: String) {
         CallStateReceiver.setActiveCallId(leadIdOrCallId)
-        currentActiveCallId = leadIdOrCallId
-
         try {
             val dialIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$phoneNumber")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             }
             startActivity(dialIntent)
         } catch (e: Exception) {
-            Toast.makeText(this, "Call permission error: ${e.message}", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Dial permission error: ${e.message}", Toast.LENGTH_LONG).show()
         }
+    }
+
+    private fun requestPermissionsSafely() {
+        try {
+            val perms = arrayOf(
+                android.Manifest.permission.CALL_PHONE,
+                android.Manifest.permission.READ_PHONE_STATE
+            )
+            val missing = perms.filter {
+                checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            }
+            if (missing.isNotEmpty()) {
+                requestPermissions(missing.toTypedArray(), 101)
+            }
+        } catch (e: Exception) {}
     }
 }
