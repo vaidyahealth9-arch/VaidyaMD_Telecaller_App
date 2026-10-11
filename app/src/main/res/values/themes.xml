@@ -1,0 +1,10 @@
+<resources>
+    <!-- Base application theme -->
+    <style name="Theme.VaidyaMD" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand colors matching HMS -->
+        <item name="colorPrimary">#2878A8</item>
+        <item name="colorPrimaryVariant">#20638B</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#2878A8</item>
+    </style>
+</resources>

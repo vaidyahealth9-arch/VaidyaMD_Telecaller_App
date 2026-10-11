@@ -15,7 +15,7 @@
         android:label="VaidyaMD Telecaller"
         android:roundIcon="@android:drawable/sym_def_app_icon"
         android:supportsRtl="true"
-        android:theme="@style/Theme.MaterialComponents.DayNight.NoActionBar">
+        android:theme="@style/Theme.VaidyaMD">
 
         <activity
             android:name=".MainActivity"
