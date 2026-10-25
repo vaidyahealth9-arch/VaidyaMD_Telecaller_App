@@ -298,7 +298,7 @@ class MainActivity : Activity() {
         btnRow.addView(queueDialBtn)
 
         queueNextBtn = Button(this).apply {
-            text = "Next Lead"
+            text = "🔄 Next Lead"
             setBackgroundColor(Color.parseColor("#E2E8F0"))
             setTextColor(Color.parseColor("#334155"))
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
@@ -307,18 +307,6 @@ class MainActivity : Activity() {
         btnRow.addView(queueNextBtn)
         queueCard.addView(btnRow)
         layout.addView(queueCard)
-
-        val refreshBtn = Button(this).apply {
-            text = "🔄 Refresh Lead Queue"
-            setBackgroundColor(Color.parseColor("#0B4F6C"))
-            setTextColor(Color.WHITE)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = 24 }
-            setOnClickListener { fetchNextLeadFromQueue() }
-        }
-        layout.addView(refreshBtn)
 
         scroll.addView(layout)
         return scroll
@@ -339,6 +327,16 @@ class MainActivity : Activity() {
             textSize = 13f
             setBackgroundColor(Color.WHITE)
             setPadding(24, 20, 24, 20)
+            addTextChangedListener(object : android.text.TextWatcher {
+                override fun afterTextChanged(s: android.text.Editable?) {
+                    val q = s?.toString()?.trim() ?: ""
+                    if (q.length >= 2 || q.isEmpty()) {
+                        fetchAllLeads(q)
+                    }
+                }
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            })
         }
         root.addView(leadsSearchInput)
 
@@ -592,7 +590,12 @@ class MainActivity : Activity() {
 
                             queueLeadName.text = name
                             queueLeadPhone.text = activeLeadPhone
-                            queueLeadDetails.text = "📍 $city  •  Previous Calls: $callsCount"
+                            val lastNotes = json.optString("last_notes", "")
+                            if (lastNotes.isNotEmpty() && lastNotes != "null") {
+                                queueLeadDetails.text = "📍 $city  •  Previous Calls: $callsCount\n💬 Note: $lastNotes"
+                            } else {
+                                queueLeadDetails.text = "📍 $city  •  Previous Calls: $callsCount"
+                            }
                             queueDialBtn.isEnabled = true
                         } catch (e: Exception) {
                             queueLeadName.text = "Queue Clear"
@@ -680,13 +683,21 @@ class MainActivity : Activity() {
                 setTextColor(Color.parseColor("#0F172A"))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             }
+            val (badgeTextCol, badgeBgCol) = when (status.uppercase()) {
+                "NEW" -> Pair("#1D4ED8", "#EFF6FF")
+                "FOLLOW UP" -> Pair("#B45309", "#FEF3C7")
+                "INTERESTED" -> Pair("#15803D", "#DCFCE7")
+                "CONVERTED" -> Pair("#0B4F6C", "#E0F2FE")
+                "LOST", "DO NOT CALL" -> Pair("#B91C1C", "#FEE2E2")
+                else -> Pair("#334155", "#F1F5F9")
+            }
             val statusBadge = TextView(this).apply {
                 text = status
                 textSize = 10f
                 setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#0B4F6C"))
-                setBackgroundColor(Color.parseColor("#E0F2FE"))
-                setPadding(12, 6, 12, 6)
+                setTextColor(Color.parseColor(badgeTextCol))
+                setBackgroundColor(Color.parseColor(badgeBgCol))
+                setPadding(14, 6, 14, 6)
             }
             titleRow.addView(nameView)
             titleRow.addView(statusBadge)
