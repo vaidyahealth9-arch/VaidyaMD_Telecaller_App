@@ -289,7 +289,7 @@ class MainActivity : Activity() {
                 val leadId = activeLeadId
                 val phone = activeLeadPhone
                 if (leadId != null && phone != null) {
-                    placeCallToPatient(leadId, phone)
+                    initiateCallAndDial(leadId, phone)
                 } else {
                     Toast.makeText(this@MainActivity, "No active lead in queue", Toast.LENGTH_SHORT).show()
                 }
@@ -707,7 +707,7 @@ class MainActivity : Activity() {
                 textSize = 12f
                 setOnClickListener {
                     val id = lead.getString("id")
-                    placeCallToPatient(id, phone)
+                    initiateCallAndDial(id, phone)
                 }
             }
             card.addView(callBtn)
@@ -718,14 +718,138 @@ class MainActivity : Activity() {
 
     private fun fetchCallHistory() {
         historyListContainer.removeAllViews()
-        val notice = TextView(this).apply {
-            text = "Automated Call Recording Sync Active.\nAny outgoing calls made from this device are automatically checked upon hang-up and synced to the VaidyaMD server for Faster-Whisper transcription."
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
+
+        val loading = TextView(this).apply {
+            text = "Loading recent calls & recordings..."
             textSize = 12f
-            setTextColor(Color.parseColor("#475569"))
+            setTextColor(Color.parseColor("#64748B"))
             setPadding(24, 24, 24, 24)
-            setBackgroundColor(Color.WHITE)
         }
-        historyListContainer.addView(notice)
+        historyListContainer.addView(loading)
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/crm/calls?limit=25")
+            .header("Authorization", "Bearer $token")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                runOnUiThread {
+                    historyListContainer.removeAllViews()
+                    val err = TextView(this@MainActivity).apply {
+                        text = "Failed to load call history: ${e.message}"
+                        textSize = 12f
+                        setTextColor(Color.parseColor("#DC2626"))
+                        setPadding(24, 24, 24, 24)
+                    }
+                    historyListContainer.addView(err)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                runOnUiThread {
+                    historyListContainer.removeAllViews()
+                    if (!response.isSuccessful) {
+                        val err = TextView(this@MainActivity).apply {
+                            text = "Error loading history (HTTP ${response.code})"
+                            textSize = 12f
+                            setTextColor(Color.parseColor("#DC2626"))
+                            setPadding(24, 24, 24, 24)
+                        }
+                        historyListContainer.addView(err)
+                        return@runOnUiThread
+                    }
+                    try {
+                        val items = JSONArray(body)
+                        if (items.length() == 0) {
+                            val empty = TextView(this@MainActivity).apply {
+                                text = "No call logs recorded yet.\nOutgoing SIM calls will appear here along with transcripts."
+                                textSize = 13f
+                                setTextColor(Color.parseColor("#64748B"))
+                                setPadding(32, 48, 32, 48)
+                                gravity = Gravity.CENTER
+                            }
+                            historyListContainer.addView(empty)
+                            return@runOnUiThread
+                        }
+                        for (i in 0 until items.length()) {
+                            val item = items.getJSONObject(i)
+                            val phone = item.optString("phone_dialed", "Unknown")
+                            val duration = item.optInt("duration_seconds", 0)
+                            val disp = item.optString("disposition", "Not Logged").replace('_', ' ')
+                            val transcriptStatus = item.optString("transcript_status", "pending")
+                            val transcriptText = item.optString("transcript_text", "")
+
+                            val card = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.VERTICAL
+                                setPadding(24, 20, 24, 20)
+                                setBackgroundColor(Color.WHITE)
+                                elevation = 2f
+                                layoutParams = LinearLayout.LayoutParams(
+                                    LinearLayout.LayoutParams.MATCH_PARENT,
+                                    LinearLayout.LayoutParams.WRAP_CONTENT
+                                ).apply { bottomMargin = 16 }
+                            }
+
+                            val row1 = LinearLayout(this@MainActivity).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                            }
+                            val phoneTxt = TextView(this@MainActivity).apply {
+                                text = "📞 $phone"
+                                textSize = 14f
+                                setTypeface(null, Typeface.BOLD)
+                                setTextColor(Color.parseColor("#0F172A"))
+                                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                            }
+                            val durTxt = TextView(this@MainActivity).apply {
+                                text = "${duration / 60}m ${duration % 60}s"
+                                textSize = 12f
+                                setTypeface(Typeface.MONOSPACE, Typeface.BOLD)
+                                setTextColor(Color.parseColor("#0B4F6C"))
+                            }
+                            row1.addView(phoneTxt)
+                            row1.addView(durTxt)
+                            card.addView(row1)
+
+                            val dispTxt = TextView(this@MainActivity).apply {
+                                text = "Outcome: ${disp.capitalize()}"
+                                textSize = 12f
+                                setTextColor(Color.parseColor("#475569"))
+                                setPadding(0, 8, 0, 4)
+                            }
+                            card.addView(dispTxt)
+
+                            val sttTxt = TextView(this@MainActivity).apply {
+                                if (transcriptText.isNotEmpty() && !transcriptText.startsWith("[")) {
+                                    text = "📝 Whisper: \"${transcriptText.take(120)}...\""
+                                    setTextColor(Color.parseColor("#0F766E"))
+                                } else {
+                                    text = "🎙 Whisper Status: $transcriptStatus"
+                                    setTextColor(Color.parseColor("#94A3B8"))
+                                }
+                                textSize = 11f
+                                setPadding(0, 4, 0, 0)
+                            }
+                            card.addView(sttTxt)
+
+                            historyListContainer.addView(card)
+                        }
+                    } catch (e: Exception) {
+                        val err = TextView(this@MainActivity).apply {
+                            text = "Error parsing history: ${e.message}"
+                            textSize = 12f
+                            setTextColor(Color.parseColor("#DC2626"))
+                            setPadding(24, 24, 24, 24)
+                        }
+                        historyListContainer.addView(err)
+                    }
+                }
+            }
+        })
     }
 
     private fun fetchPerformanceStats() {
@@ -778,10 +902,14 @@ class MainActivity : Activity() {
             bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
         } catch (e: Exception) { 100 }
 
+        val appVer = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: "1.1.0"
+        } catch (e: Exception) { "1.1.0" }
+
         val payload = JSONObject().apply {
             put("device_id", deviceId)
             put("device_model", "${Build.MANUFACTURER} ${Build.MODEL}")
-            put("app_version", "1.0.0")
+            put("app_version", appVer)
             put("sim_operator", "SIM Active")
             put("battery_level", batteryLevel)
             put("current_state", "idle")
@@ -814,6 +942,14 @@ class MainActivity : Activity() {
                         runOnUiThread { handleDeviceRevoked() }
                         return
                     }
+
+                    // Save returned authenticated user_id to correctly bind WebSocket channel
+                    val returnedUserId = json.optString("user_id", "")
+                    if (returnedUserId.isNotEmpty() && returnedUserId != prefs.getString("user_id", "")) {
+                        prefs.edit().putString("user_id", returnedUserId).apply()
+                        connectWebSocketBridge()
+                    }
+
                     runOnUiThread {
                         queueStatusText.text = "● Online (Ready for SIM Calls)"
                         queueStatusText.setTextColor(Color.parseColor("#15803D"))
@@ -831,7 +967,7 @@ class MainActivity : Activity() {
     }
 
     private fun handleDeviceRevoked() {
-        prefs.edit().clear().apply()
+        prefs.edit().remove("auth_token").remove("user_id").putBoolean("is_revoked", true).apply()
         AlertDialog.Builder(this)
             .setTitle("Access Revoked")
             .setMessage("This mobile device has been de-authorized by the hospital administration.")
@@ -847,10 +983,13 @@ class MainActivity : Activity() {
     private fun connectWebSocketBridge() {
         val baseUrl = cleanBaseUrl()
         val token = getAuthToken()
+        val userId = prefs.getString("user_id", "") ?: ""
+        val channelId = if (userId.isNotEmpty()) userId else "demo"
 
-        val wsUrl = baseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/ws/notifications/demo?token=$token"
+        val wsUrl = baseUrl.replace("http://", "ws://").replace("https://", "wss://") + "/api/ws/notifications/$channelId?token=$token"
         val request = Request.Builder().url(wsUrl).build()
 
+        webSocket?.close(1000, "Reconnecting")
         webSocket = httpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {
                 try {
@@ -861,7 +1000,7 @@ class MainActivity : Activity() {
                         if (phone.isNotEmpty()) {
                             runOnUiThread {
                                 Toast.makeText(this@MainActivity, "PC Triggered Dial: $phone", Toast.LENGTH_SHORT).show()
-                                placeCallToPatient(callId, phone)
+                                placeCallDirect(callId, phone)
                             }
                         }
                     }
@@ -870,8 +1009,50 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun placeCallToPatient(leadIdOrCallId: String, phoneNumber: String) {
-        CallStateReceiver.setActiveCallId(leadIdOrCallId)
+    private fun initiateCallAndDial(leadId: String, phoneNumber: String) {
+        val baseUrl = cleanBaseUrl()
+        val token = getAuthToken()
+
+        Toast.makeText(this, "Starting call session...", Toast.LENGTH_SHORT).show()
+
+        val formBody = FormBody.Builder()
+            .add("lead_id", leadId)
+            .add("phone", phoneNumber)
+            .build()
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/crm/calls/start")
+            .header("Authorization", "Bearer $token")
+            .post(formBody)
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                // If network/server fails, still allow offline SIM dial so patient is not blocked
+                runOnUiThread {
+                    Toast.makeText(this@MainActivity, "Calling (Offline session): ${e.message}", Toast.LENGTH_SHORT).show()
+                    placeCallDirect(leadId, phoneNumber)
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                var assignedCallId = leadId
+                if (response.isSuccessful && body.isNotEmpty()) {
+                    try {
+                        val json = JSONObject(body)
+                        assignedCallId = json.optString("id", leadId)
+                    } catch (e: Exception) {}
+                }
+                runOnUiThread {
+                    placeCallDirect(assignedCallId, phoneNumber)
+                }
+            }
+        })
+    }
+
+    private fun placeCallDirect(callId: String, phoneNumber: String) {
+        CallStateReceiver.setActiveCallId(callId)
         try {
             val dialIntent = Intent(Intent.ACTION_CALL, Uri.parse("tel:$phoneNumber")).apply {
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
