@@ -11,13 +11,17 @@ import android.util.Log
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 /**
  * Listens for Call State transitions via dynamic BroadcastReceiver and TelephonyCallback.
  * When call terminates (CALL_STATE_IDLE after OFFHOOK or Dialing):
  * 1. Computes talk time duration and immediately informs backend /api/crm/calls/{call_id}/end
- * 2. Scans storage + MediaStore with a 2.5-second buffer for native call recording audio and triggers Faster-Whisper sync
+ * 2. If initiated from mobile, triggers on-screen Call Outcome & Notes dialog
+ * 3. Scans storage + MediaStore with a 2.5-second buffer for native call recording audio and triggers Faster-Whisper sync
+ * 4. Buffers offline if Wi-Fi drops, auto-flushing upon reconnection
  */
 class CallStateReceiver : BroadcastReceiver() {
 
@@ -25,15 +29,25 @@ class CallStateReceiver : BroadcastReceiver() {
         private const val TAG = "CallStateReceiver"
         private var lastState = TelephonyManager.CALL_STATE_IDLE
         private var activeCallId: String? = null
+        private var activeInitiatedFrom = "mobile"
+        private var activeLeadName: String? = null
         private var callStartTime: Long = 0
         private var offhookStartTime: Long = 0
         private val httpClient = OkHttpClient()
 
-        fun setActiveCallId(callId: String) {
+        private var onCallEndedListener: ((callId: String, durationSec: Int, initiatedFrom: String, leadName: String?) -> Unit)? = null
+
+        fun setOnCallEndedListener(listener: (callId: String, durationSec: Int, initiatedFrom: String, leadName: String?) -> Unit) {
+            onCallEndedListener = listener
+        }
+
+        fun setActiveCallId(callId: String, initiatedFrom: String = "mobile", leadName: String? = null) {
             activeCallId = callId
+            activeInitiatedFrom = initiatedFrom
+            activeLeadName = leadName
             callStartTime = System.currentTimeMillis()
             offhookStartTime = 0
-            Log.i(TAG, "Active call ID registered: $callId at $callStartTime")
+            Log.i(TAG, "Active call ID registered: $callId (Source: $initiatedFrom, Lead: $leadName)")
         }
 
         fun handleStateChange(context: Context, state: Int) {
@@ -53,18 +67,25 @@ class CallStateReceiver : BroadcastReceiver() {
                             callStartTime > 0 -> ((System.currentTimeMillis() - callStartTime) / 1000).toInt()
                             else -> 0
                         }
-                        Log.i(TAG, "Call finished. Duration: ${durationSec}s for callId: $targetCallId")
+                        val source = activeInitiatedFrom
+                        val leadName = activeLeadName
+
+                        Log.i(TAG, "Call finished. Duration: ${durationSec}s for callId: $targetCallId (Source: $source)")
 
                         // Clear activeCallId to prevent duplicate executions from dual receiver/callback
                         activeCallId = null
-                        val wasConnected = offhookStartTime > 0
                         offhookStartTime = 0
                         callStartTime = 0
 
                         // 1. Immediately report call duration and completion to backend
                         notifyCallEnded(context, targetCallId, durationSec)
 
-                        // 2. Schedule recording scan with a 2.5s delay to allow phone dialer to flush audio file
+                        // 2. Notify MainActivity to show Call Outcome dialog if initiated from mobile
+                        Handler(Looper.getMainLooper()).post {
+                            onCallEndedListener?.invoke(targetCallId, durationSec, source, leadName)
+                        }
+
+                        // 3. Schedule recording scan with a 2.5s delay to allow phone dialer to flush audio file
                         Handler(Looper.getMainLooper()).postDelayed({
                             uploadLatestCallRecording(context, targetCallId)
                         }, 2500)
@@ -94,13 +115,49 @@ class CallStateReceiver : BroadcastReceiver() {
 
             httpClient.newCall(request).enqueue(object : okhttp3.Callback {
                 override fun onFailure(call: okhttp3.Call, e: java.io.IOException) {
-                    Log.e(TAG, "Failed to report call end to server: ${e.message}")
+                    Log.e(TAG, "Failed to report call end to server: ${e.message}. Queuing offline.")
+                    savePendingCallEndOffline(context, callId, durationSec)
                 }
 
                 override fun onResponse(call: okhttp3.Call, response: okhttp3.Response) {
                     Log.i(TAG, "Call end registered on server (HTTP ${response.code})")
                 }
             })
+        }
+
+        private fun savePendingCallEndOffline(context: Context, callId: String, durationSec: Int) {
+            try {
+                val prefs = context.getSharedPreferences("vaidyamd_crm", Context.MODE_PRIVATE)
+                val raw = prefs.getString("pending_sync_calls", "[]") ?: "[]"
+                val arr = JSONArray(raw)
+                val obj = JSONObject().apply {
+                    put("call_id", callId)
+                    put("duration_seconds", durationSec)
+                }
+                arr.put(obj)
+                prefs.edit().putString("pending_sync_calls", arr.toString()).apply()
+            } catch (e: Exception) {
+                Log.e(TAG, "Error saving offline call sync: ${e.message}")
+            }
+        }
+
+        fun flushPendingCallEnds(context: Context) {
+            try {
+                val prefs = context.getSharedPreferences("vaidyamd_crm", Context.MODE_PRIVATE)
+                val raw = prefs.getString("pending_sync_calls", "[]") ?: "[]"
+                val arr = JSONArray(raw)
+                if (arr.length() == 0) return
+
+                Log.i(TAG, "Flushing ${arr.length()} offline call records to server...")
+                prefs.edit().remove("pending_sync_calls").apply()
+
+                for (i in 0 until arr.length()) {
+                    val item = arr.getJSONObject(i)
+                    val cId = item.getString("call_id")
+                    val dur = item.getInt("duration_seconds")
+                    notifyCallEnded(context, cId, dur)
+                }
+            } catch (e: Exception) {}
         }
 
         private fun uploadLatestCallRecording(context: Context, targetCallId: String) {
