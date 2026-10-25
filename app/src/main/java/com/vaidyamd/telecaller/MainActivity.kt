@@ -14,6 +14,11 @@ import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.widget.*
+import android.content.IntentFilter
+import android.telephony.PhoneStateListener
+import android.telephony.TelephonyCallback
+import android.telephony.TelephonyManager
+import android.util.Log
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -29,6 +34,9 @@ class MainActivity : Activity() {
         .connectTimeout(12, TimeUnit.SECONDS)
         .readTimeout(12, TimeUnit.SECONDS)
         .build()
+
+    private val callStateReceiver = CallStateReceiver()
+    private var isReceiverRegistered = false
 
     // Root views
     private lateinit var contentContainer: FrameLayout
@@ -112,6 +120,7 @@ class MainActivity : Activity() {
 
         // Permissions & Background presence
         requestPermissionsSafely()
+        registerCallListeners()
         startPresenceSync()
         fetchNextLeadFromQueue()
     }
@@ -120,6 +129,12 @@ class MainActivity : Activity() {
         super.onDestroy()
         heartbeatTimer?.cancel()
         webSocket?.close(1000, "Activity destroyed")
+        try {
+            if (isReceiverRegistered) {
+                unregisterReceiver(callStateReceiver)
+                isReceiverRegistered = false
+            }
+        } catch (e: Exception) {}
     }
 
     // ========================================================================
@@ -460,11 +475,11 @@ class MainActivity : Activity() {
         }
         layout.addView(setHeader)
 
-        val savedUrl = prefs.getString("server_url", "http://192.168.1.3:8000")
+        val savedUrl = prefs.getString("server_url", "http://192.168.1.4:8000")
         val savedToken = prefs.getString("auth_token", "demo-telecaller-token")
 
         serverInput = EditText(this).apply {
-            hint = "HMS API URL (e.g. http://192.168.1.3:8000)"
+            hint = "HMS API URL (e.g. http://192.168.1.4:8000)"
             setText(savedUrl)
             textSize = 13f
         }
@@ -496,6 +511,18 @@ class MainActivity : Activity() {
             }
         }
         layout.addView(saveBtn)
+
+        val updateBtn = Button(this).apply {
+            text = "🔄 Check for App Update"
+            setBackgroundColor(Color.parseColor("#E2E8F0"))
+            setTextColor(Color.parseColor("#1E293B"))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 16 }
+            setOnClickListener { checkAppUpdate(manual = true) }
+        }
+        layout.addView(updateBtn)
 
         scroll.addView(layout)
         return scroll
@@ -534,7 +561,7 @@ class MainActivity : Activity() {
     // ========================================================================
 
     private fun cleanBaseUrl(): String {
-        var url = prefs.getString("server_url", "http://192.168.1.3:8000")?.trim()?.trimEnd('/') ?: "http://192.168.1.3:8000"
+        var url = prefs.getString("server_url", "http://192.168.1.4:8000")?.trim()?.trimEnd('/') ?: "http://192.168.1.4:8000"
         if (url.endsWith("/api")) {
             url = url.substring(0, url.length - 4)
         }
@@ -1076,16 +1103,126 @@ class MainActivity : Activity() {
 
     private fun requestPermissionsSafely() {
         try {
-            val perms = arrayOf(
+            val perms = mutableListOf(
                 android.Manifest.permission.CALL_PHONE,
-                android.Manifest.permission.READ_PHONE_STATE
+                android.Manifest.permission.READ_PHONE_STATE,
+                android.Manifest.permission.READ_CALL_LOG
             )
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                perms.add(android.Manifest.permission.READ_MEDIA_AUDIO)
+            } else {
+                perms.add(android.Manifest.permission.READ_EXTERNAL_STORAGE)
+            }
             val missing = perms.filter {
                 checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED
             }
             if (missing.isNotEmpty()) {
                 requestPermissions(missing.toTypedArray(), 101)
             }
-        } catch (e: Exception) {}
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Permission request failed: ${e.message}")
+        }
+    }
+
+    private fun registerCallListeners() {
+        // 1. Dynamic Broadcast Receiver for ACTION_PHONE_STATE_CHANGED
+        try {
+            if (!isReceiverRegistered) {
+                val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    registerReceiver(callStateReceiver, filter, RECEIVER_EXPORTED)
+                } else {
+                    registerReceiver(callStateReceiver, filter)
+                }
+                isReceiverRegistered = true
+                Log.i("MainActivity", "CallStateReceiver registered dynamically")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to register CallStateReceiver: ${e.message}")
+        }
+
+        // 2. TelephonyCallback / PhoneStateListener for direct system callback
+        try {
+            val tm = getSystemService(TELEPHONY_SERVICE) as? TelephonyManager
+            if (tm != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                    tm.registerTelephonyCallback(mainExecutor, object : TelephonyCallback(), TelephonyCallback.CallStateListener {
+                        override fun onCallStateChanged(state: Int) {
+                            CallStateReceiver.handleStateChange(this@MainActivity, state)
+                        }
+                    })
+                } else {
+                    @Suppress("DEPRECATION")
+                    tm.listen(object : PhoneStateListener() {
+                        @Deprecated("Deprecated in Java")
+                        override fun onCallStateChanged(state: Int, phoneNumber: String?) {
+                            CallStateReceiver.handleStateChange(this@MainActivity, state)
+                        }
+                    }, PhoneStateListener.LISTEN_CALL_STATE)
+                }
+                Log.i("MainActivity", "TelephonyCallback/PhoneStateListener registered")
+            }
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to register TelephonyCallback: ${e.message}")
+        }
+    }
+
+    private fun checkAppUpdate(manual: Boolean = false) {
+        val baseUrl = cleanBaseUrl()
+        val currentCode = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                packageManager.getPackageInfo(packageName, 0).longVersionCode.toInt()
+            } else {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0).versionCode
+            }
+        } catch (e: Exception) { 1 }
+
+        val request = Request.Builder()
+            .url("$baseUrl/api/crm/app/version")
+            .get()
+            .build()
+
+        httpClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                if (manual) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, "Update check failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                val body = response.body?.string() ?: ""
+                if (response.isSuccessful && body.isNotEmpty()) {
+                    try {
+                        val json = JSONObject(body)
+                        val remoteCode = json.optInt("version_code", 0)
+                        val versionName = json.optString("version_name", "")
+                        val changelog = json.optString("changelog", "Performance improvements.")
+                        val downloadPath = json.optString("download_url", "/api/crm/app/download")
+
+                        if (remoteCode > currentCode) {
+                            runOnUiThread {
+                                AlertDialog.Builder(this@MainActivity)
+                                    .setTitle("New Update Available: v$versionName")
+                                    .setMessage(changelog)
+                                    .setPositiveButton("Download & Install") { _, _ ->
+                                        val fullUrl = "$baseUrl$downloadPath"
+                                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl))
+                                        startActivity(intent)
+                                    }
+                                    .setNegativeButton("Later", null)
+                                    .show()
+                            }
+                        } else if (manual) {
+                            runOnUiThread {
+                                Toast.makeText(this@MainActivity, "You are on the latest version (v${versionName.ifEmpty { "1.2.1" }})", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    } catch (e: Exception) {}
+                }
+            }
+        })
     }
 }
