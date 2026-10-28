@@ -17,15 +17,62 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    buildFeatures {
+        buildConfig = true
+        resValues = true
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH") ?: project.findProperty("ANDROID_KEYSTORE_PATH") as String?
+            if (!keystorePath.isNullOrEmpty() && file(keystorePath).exists()) {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: project.findProperty("ANDROID_KEYSTORE_PASSWORD") as String?
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS") ?: project.findProperty("ANDROID_KEY_ALIAS") as String?
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD") ?: project.findProperty("ANDROID_KEY_PASSWORD") as String?
+            }
+        }
+    }
+
+    flavorDimensions += "environment"
+    productFlavors {
+        create("dev") {
+            dimension = "environment"
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "VaidyaMD Telecaller Dev")
+            buildConfigField("String", "ENVIRONMENT", "\"dev\"")
+            // Default dev backend: Google Cloud Run dev service (can be overridden via QR pairing or in-app settings)
+            buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://hms-backend-1062509658389.asia-south1.run.app\"")
+            buildConfigField("String", "GCS_BUCKET_URL", "\"https://storage.googleapis.com/vaidya-hms-dev-uploads/apps/vaidyamd-telecaller-dev.apk\"")
+        }
+        create("prod") {
+            dimension = "environment"
+            resValue("string", "app_name", "VaidyaMD Telecaller")
+            buildConfigField("String", "ENVIRONMENT", "\"prod\"")
+            // Default prod backend: Production API domain
+            buildConfigField("String", "DEFAULT_SERVER_URL", "\"https://api.vaidyamd.com\"")
+            buildConfigField("String", "GCS_BUCKET_URL", "\"https://storage.googleapis.com/vaidya-hms-prod-uploads/apps/vaidyamd-telecaller.apk\"")
+        }
+    }
+
     buildTypes {
+        debug {
+            isDebuggable = true
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning?.storeFile != null && releaseSigning.storeFile!!.exists()) {
+                signingConfig = releaseSigning
+            }
         }
     }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

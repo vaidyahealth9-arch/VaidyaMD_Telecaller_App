@@ -542,11 +542,11 @@ class MainActivity : AppCompatActivity() {
         }
         layout.addView(setHeader)
 
-        val savedUrl = prefs.getString("server_url", "http://192.168.1.4:8000")
-        val savedToken = prefs.getString("auth_token", "demo-telecaller-token")
+        val savedUrl = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL) ?: BuildConfig.DEFAULT_SERVER_URL
+        val savedToken = prefs.getString("auth_token", "") ?: ""
 
         serverInput = EditText(this).apply {
-            hint = "HMS API URL (e.g. http://192.168.1.4:8000)"
+            hint = "HMS API URL (e.g. ${BuildConfig.DEFAULT_SERVER_URL})"
             setText(savedUrl)
             textSize = 13f
         }
@@ -849,7 +849,7 @@ class MainActivity : AppCompatActivity() {
     // ========================================================================
 
     private fun cleanBaseUrl(): String {
-        var url = prefs.getString("server_url", "http://192.168.1.4:8000")?.trim()?.trimEnd('/') ?: "http://192.168.1.4:8000"
+        var url = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL)?.trim()?.trimEnd('/') ?: BuildConfig.DEFAULT_SERVER_URL
         if (url.endsWith("/api")) {
             url = url.substring(0, url.length - 4)
         }
@@ -857,7 +857,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getAuthToken(): String {
-        return prefs.getString("auth_token", "demo-telecaller-token")?.trim() ?: ""
+        return prefs.getString("auth_token", "")?.trim() ?: ""
     }
 
     private fun fetchNextLeadFromQueue() {
@@ -1581,7 +1581,11 @@ class MainActivity : AppCompatActivity() {
                                     .setTitle("New Update Available: v$versionName")
                                     .setMessage(changelog)
                                     .setPositiveButton("Download & Install") { _, _ ->
-                                        val fullUrl = "$baseUrl$downloadPath"
+                                        val fullUrl = if (downloadPath.startsWith("http://") || downloadPath.startsWith("https://")) {
+                                            downloadPath
+                                        } else {
+                                            "$baseUrl$downloadPath"
+                                        }
                                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(fullUrl))
                                         startActivity(intent)
                                     }

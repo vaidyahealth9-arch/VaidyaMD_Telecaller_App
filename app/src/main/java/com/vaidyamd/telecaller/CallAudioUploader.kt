@@ -14,7 +14,7 @@ object CallAudioUploader {
 
     fun upload(context: Context, callId: String, audioFile: File) {
         val prefs = context.getSharedPreferences("vaidyamd_crm", Context.MODE_PRIVATE)
-        var serverBaseUrl = prefs.getString("server_url", "http://192.168.1.4:8000")?.trim()?.trimEnd('/') ?: "http://192.168.1.4:8000"
+        var serverBaseUrl = prefs.getString("server_url", BuildConfig.DEFAULT_SERVER_URL)?.trim()?.trimEnd('/') ?: BuildConfig.DEFAULT_SERVER_URL
         if (serverBaseUrl.endsWith("/api")) {
             serverBaseUrl = serverBaseUrl.substring(0, serverBaseUrl.length - 4)
         }
