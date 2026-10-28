@@ -59,6 +59,7 @@ android {
     buildTypes {
         debug {
             isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = false
@@ -69,6 +70,9 @@ android {
             val releaseSigning = signingConfigs.findByName("release")
             if (releaseSigning?.storeFile != null && releaseSigning.storeFile!!.exists()) {
                 signingConfig = releaseSigning
+            } else {
+                // Fallback to debug keystore signing so APK can be installed without "package appears to be invalid" error
+                signingConfig = signingConfigs.getByName("debug")
             }
         }
     }

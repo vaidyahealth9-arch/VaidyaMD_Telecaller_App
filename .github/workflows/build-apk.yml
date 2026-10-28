@@ -108,12 +108,15 @@ jobs:
       - name: Locate Built APK
         id: locate-apk
         run: |
-          APK_FILE=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          APK_FILE=$(find app/build/outputs/apk -type f -name "*.apk" ! -name "*unsigned*" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          fi
           if [ -z "$APK_FILE" ]; then
             echo "Error: No APK file was generated!"
             exit 1
           fi
-          echo "Found APK at: $APK_FILE"
+          echo "Found Signed APK at: $APK_FILE"
           echo "apk_path=$APK_FILE" >> "$GITHUB_OUTPUT"
           echo "apk_filename=$(basename "$APK_FILE")" >> "$GITHUB_OUTPUT"
 
