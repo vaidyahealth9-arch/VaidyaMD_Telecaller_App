@@ -678,9 +678,6 @@ class MainActivity : AppCompatActivity() {
             applyPairingCredentials(server, token, userId, userName)
         }
     }
-            applyPairingCredentials(server, token)
-        }
-    }
 
     private fun applyPairingCredentials(server: String, token: String, userId: String = "", userName: String = "") {
         if (token.isNotEmpty()) {
