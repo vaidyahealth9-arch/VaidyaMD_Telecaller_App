@@ -629,27 +629,37 @@ class MainActivity : AppCompatActivity() {
 
     private fun launchQrScanner() {
         val options = ScanOptions().apply {
-            setPrompt("Scan VaidyaMD CRM Pairing QR Code")
+            setPrompt("Align QR code within the frame to pair")
             setBeepEnabled(true)
-            setOrientationLocked(false)
+            setOrientationLocked(true)
+            setCaptureActivity(PortraitCaptureActivity::class.java)
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
         }
         qrScanLauncher.launch(options)
     }
 
     private fun handleScannedQrPayload(payload: String) {
         try {
-            if (payload.startsWith("vaidyamd://pair") || payload.contains("/api/crm/pair")) {
-                val uri = Uri.parse(payload)
-                val token = uri.getQueryParameter("token") ?: ""
-                val server = uri.getQueryParameter("server") ?: ""
-                applyPairingCredentials(server, token)
-            } else if (payload.startsWith("{")) {
-                val json = JSONObject(payload)
-                val token = json.optString("auth_token", json.optString("token", ""))
-                val server = json.optString("server_url", "")
-                val userName = json.optString("user_name", "")
-                val userId = json.optString("user_id", "")
+            val cleanPayload = payload.trim()
+            if (cleanPayload.startsWith("vaidyamd://") || cleanPayload.contains("/api/crm/pair") || cleanPayload.startsWith("http")) {
+                val uri = Uri.parse(cleanPayload)
+                val token = uri.getQueryParameter("token") ?: uri.getQueryParameter("t") ?: ""
+                val server = uri.getQueryParameter("server") ?: uri.getQueryParameter("s") ?: ""
+                val userName = uri.getQueryParameter("user_name") ?: uri.getQueryParameter("u") ?: ""
+                val userId = uri.getQueryParameter("user_id") ?: ""
                 applyPairingCredentials(server, token, userId, userName)
+            } else if (cleanPayload.startsWith("{")) {
+                val json = JSONObject(cleanPayload)
+                val token = json.optString("t", json.optString("auth_token", json.optString("token", "")))
+                val server = json.optString("s", json.optString("server_url", json.optString("server", "")))
+                val userName = json.optString("u", json.optString("user_name", ""))
+                val userId = json.optString("id", json.optString("user_id", ""))
+                applyPairingCredentials(server, token, userId, userName)
+            } else if (cleanPayload.contains("|")) {
+                val parts = cleanPayload.split("|")
+                if (parts.size >= 2) {
+                    applyPairingCredentials(parts[0], parts[1])
+                }
             } else {
                 Toast.makeText(this, "Unrecognized QR payload format", Toast.LENGTH_SHORT).show()
             }
@@ -660,9 +670,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleDeepLink(intent: Intent?) {
         val data = intent?.data ?: return
-        if (data.scheme == "vaidyamd" && data.host == "pair") {
-            val token = data.getQueryParameter("token") ?: ""
-            val server = data.getQueryParameter("server") ?: ""
+        if (data.scheme == "vaidyamd" && (data.host == "pair" || data.host == "p")) {
+            val token = data.getQueryParameter("token") ?: data.getQueryParameter("t") ?: ""
+            val server = data.getQueryParameter("server") ?: data.getQueryParameter("s") ?: ""
+            val userName = data.getQueryParameter("user_name") ?: data.getQueryParameter("u") ?: ""
+            val userId = data.getQueryParameter("user_id") ?: ""
+            applyPairingCredentials(server, token, userId, userName)
+        }
+    }
             applyPairingCredentials(server, token)
         }
     }
